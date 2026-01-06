@@ -10,12 +10,14 @@ export default defineConfig({
   server: {
     host: true,
     port: Number(process.env.PORT) || 3000,
-    strictPort: true
+    strictPort: true,
+    allowedHosts: true
   },
   preview: {
     host: true,
     port: Number(process.env.PORT) || 3000,
-    strictPort: true
+    strictPort: true,
+    allowedHosts: true
   },
   build: {
     outDir: 'dist',
