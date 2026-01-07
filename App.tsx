@@ -6,10 +6,25 @@ import PreviewFrame from './components/PreviewFrame';
 
 type View = 'landing' | 'generator' | 'how-it-works';
 
+// Fix: Define AIStudio interface to match platform expectations
+interface AIStudio {
+  hasSelectedApiKey: () => Promise<boolean>;
+  openSelectKey: () => Promise<void>;
+}
+
+// Extend window for AI Studio helpers
+declare global {
+  interface Window {
+    // Fix: Match the readonly modifier and type name from the environment
+    readonly aistudio: AIStudio;
+  }
+}
+
 const App: React.FC = () => {
   // Navigation & Theme State
   const [view, setView] = useState<View>('landing');
   const [isDark, setIsDark] = useState(false);
+  const [hasUserKey, setHasUserKey] = useState(false);
 
   // Generator State
   const [image, setImage] = useState<string | null>(null);
@@ -21,14 +36,30 @@ const App: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Apply Dark Mode
+  // Apply Dark Mode & Check Key Status
   useEffect(() => {
     if (isDark) {
       document.documentElement.classList.add('dark');
     } else {
       document.documentElement.classList.remove('dark');
     }
+    
+    const checkKey = async () => {
+      if (window.aistudio) {
+        const has = await window.aistudio.hasSelectedApiKey();
+        setHasUserKey(has);
+      }
+    };
+    checkKey();
   }, [isDark]);
+
+  const handleOpenKeyPicker = async () => {
+    if (window.aistudio) {
+      await window.aistudio.openSelectKey();
+      setHasUserKey(true);
+      setError(null);
+    }
+  };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -53,9 +84,15 @@ const App: React.FC = () => {
       setGeneratedCode(code);
       setStatus(GenerationStatus.SUCCESS);
       setActiveTab('preview');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
+    } catch (err: any) {
+      const msg = err instanceof Error ? err.message : "An unexpected error occurred.";
+      setError(msg);
       setStatus(GenerationStatus.ERROR);
+      
+      // If we hit a specific "Not Found" error after key selection, reset
+      if (msg.includes("Requested entity was not found")) {
+        setHasUserKey(false);
+      }
     }
   };
 
@@ -73,34 +110,39 @@ const App: React.FC = () => {
         
         <div className="relative z-10">
           <span className="inline-block py-1 px-3 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 text-sm font-semibold mb-6">
-            Powered by Gemini 3
+            Powered by Gemini 3 Flash
           </span>
           <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-8">
             Code from <span className="bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">Thin Air.</span>
           </h1>
           <p className="text-lg md:text-xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto mb-10">
-            Transform your hand-drawn sketches, wireframes, or screenshots into high-fidelity, responsive websites in seconds. It's not magic, it's Wizard.
+            Transform your hand-drawn sketches, wireframes, or screenshots into high-fidelity, responsive websites in seconds.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
             <button 
               onClick={() => setView('generator')}
-              className="px-8 py-4 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl font-bold text-lg shadow-xl shadow-purple-500/20 transition-all active:scale-95"
+              className="px-8 py-4 bg-purple-600 hover:bg-purple-700 text-white rounded-2xl font-bold text-lg shadow-xl shadow-purple-500/20 transition-all active:scale-95 w-full sm:w-auto"
             >
               Start Building
             </button>
-            <button 
-              onClick={() => setView('how-it-works')}
-              className="px-8 py-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl font-bold text-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-all"
-            >
-              How it works
-            </button>
+            {!hasUserKey && (
+              <button 
+                onClick={handleOpenKeyPicker}
+                className="px-8 py-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl font-bold text-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-all w-full sm:w-auto"
+              >
+                Use Private API Key (Unlimited)
+              </button>
+            )}
           </div>
+          <p className="mt-4 text-xs text-slate-400 dark:text-slate-500">
+            * Shared project quota is limited. Connect your own <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" className="underline hover:text-purple-500">Paid Billing Project</a> for unlimited access.
+          </p>
         </div>
       </section>
 
       <section className="py-20 px-6 max-w-7xl mx-auto grid md:grid-cols-3 gap-8">
         {[
-          { title: "Ultra Fast", desc: "Go from napkin sketch to functional code in under 30 seconds.", icon: "⚡" },
+          { title: "Ultra Fast", desc: "Go from napkin sketch to functional code in under 15 seconds with Flash.", icon: "⚡" },
           { title: "Tailwind Native", desc: "Generated code uses clean, modern Tailwind CSS for easy styling.", icon: "🎨" },
           { title: "Interactive", desc: "Wizard automatically adds basic JS for menus, forms, and tabs.", icon: "🪄" }
         ].map((feat, i) => (
@@ -155,7 +197,10 @@ const App: React.FC = () => {
       {/* Sidebar Inputs */}
       <div className="w-full md:w-1/3 lg:w-1/4 border-r dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col overflow-y-auto p-6 gap-6 transition-colors">
         <section>
-          <h2 className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-3">Step 1: The Blueprint</h2>
+          <div className="flex justify-between items-center mb-3">
+            <h2 className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Step 1: The Blueprint</h2>
+            {hasUserKey && <span className="text-[10px] px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-bold">Premium Active</span>}
+          </div>
           <div 
             onClick={() => fileInputRef.current?.click()}
             className={`relative border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all ${
@@ -208,7 +253,26 @@ const App: React.FC = () => {
           ) : "Cast Spell"}
         </button>
 
-        {error && <div className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-xl border border-red-100 dark:border-red-900/30">{error}</div>}
+        {error && (
+          <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-xl border border-red-100 dark:border-red-900/30 flex flex-col gap-3">
+            <span>{error}</span>
+            {error.includes("Quota") && (
+              <button 
+                onClick={handleOpenKeyPicker}
+                className="bg-red-600 text-white py-2 rounded-lg font-bold hover:bg-red-700 transition-colors"
+              >
+                Fix Quota (Select API Key)
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="mt-auto pt-6 border-t dark:border-slate-800">
+          <p className="text-[10px] text-slate-400 text-center leading-relaxed">
+            By using this tool, you agree to our Terms. <br/>
+            Project running on <strong>Gemini 3 Flash</strong>.
+          </p>
+        </div>
       </div>
 
       {/* Main Content Area */}
@@ -264,6 +328,15 @@ const App: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-4">
+          {!hasUserKey && (
+            <button 
+              onClick={handleOpenKeyPicker}
+              className="hidden lg:flex items-center gap-2 px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-bold text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+            >
+              <span className="w-2 h-2 rounded-full bg-slate-300"></span>
+              Select Private Key
+            </button>
+          )}
           <button 
             onClick={() => setIsDark(!isDark)}
             className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:ring-2 ring-purple-500/50 transition-all"
