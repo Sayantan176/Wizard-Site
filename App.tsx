@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { generateWebsiteFromImage } from './services/geminiService';
 import { GenerationStatus } from './types';
@@ -6,18 +5,9 @@ import PreviewFrame from './components/PreviewFrame';
 
 type View = 'landing' | 'generator' | 'how-it-works';
 
-// Platform interfaces
-interface AIStudio {
-  hasSelectedApiKey: () => Promise<boolean>;
-  openSelectKey: () => Promise<void>;
-}
-
-declare global {
-  /* Fix: Ensure aistudio global property is correctly typed and matches expected modifiers */
-  interface Window {
-    aistudio: AIStudio;
-  }
-}
+// Global AI Studio interfaces are provided by the environment. 
+// Redeclaring them caused a type conflict and modifier mismatch.
+// We use type assertion to access the platform-injected aistudio object safely.
 
 const App: React.FC = () => {
   // Navigation & Theme State
@@ -58,9 +48,11 @@ const App: React.FC = () => {
   // Check AI Studio Key Status
   useEffect(() => {
     const checkKey = async () => {
-      if (window.aistudio) {
+      // Use type assertion to bypass conflict with environment's global definitions
+      const aiStudio = (window as any).aistudio;
+      if (aiStudio) {
         try {
-          const has = await window.aistudio.hasSelectedApiKey();
+          const has = await aiStudio.hasSelectedApiKey();
           setHasUserKey(has);
         } catch (e) {
           console.error("Failed to check API key status", e);
@@ -71,8 +63,9 @@ const App: React.FC = () => {
   }, []);
 
   const handleOpenKeyPicker = async () => {
-    if (window.aistudio) {
-      await window.aistudio.openSelectKey();
+    const aiStudio = (window as any).aistudio;
+    if (aiStudio) {
+      await aiStudio.openSelectKey();
       // Assume success as per instructions
       setHasUserKey(true);
       setError(null);
@@ -127,7 +120,7 @@ const App: React.FC = () => {
         
         <div className="relative z-10">
           <span className="inline-block py-1 px-3 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 text-sm font-semibold mb-6">
-            Powered by Gemini 3 Flash
+            Powered by Gemini 3 Pro
           </span>
           <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white mb-8">
             Code from <span className="bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">Thin Air.</span>
@@ -159,7 +152,7 @@ const App: React.FC = () => {
 
       <section className="py-20 px-6 max-w-7xl mx-auto grid md:grid-cols-3 gap-8">
         {[
-          { title: "Ultra Fast", desc: "Go from napkin sketch to functional code in under 15 seconds with Flash.", icon: "⚡" },
+          { title: "Ultra Fast", desc: "Go from napkin sketch to functional code in seconds with Gemini 3 Pro.", icon: "⚡" },
           { title: "Tailwind Native", desc: "Generated code uses clean, modern Tailwind CSS for easy styling.", icon: "🎨" },
           { title: "Interactive", desc: "Wizard automatically adds basic JS for menus, forms, and tabs.", icon: "🪄" }
         ].map((feat, i) => (
@@ -287,7 +280,7 @@ const App: React.FC = () => {
         <div className="mt-auto pt-6 border-t dark:border-slate-800">
           <p className="text-[10px] text-slate-400 text-center leading-relaxed">
             By using this tool, you agree to our Terms. <br/>
-            Project running on <strong>Gemini 3 Flash</strong>.
+            Project running on <strong>Gemini 3 Pro</strong>.
           </p>
         </div>
       </div>

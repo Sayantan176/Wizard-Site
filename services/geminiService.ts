@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 
 export async function generateWebsiteFromImage(
@@ -7,7 +6,8 @@ export async function generateWebsiteFromImage(
 ): Promise<string> {
   // Always create a fresh instance to ensure the latest API key is used
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const model = 'gemini-3-flash-preview';
+  // Using gemini-3-pro-preview as vision-to-code is a complex reasoning and coding task.
+  const model = 'gemini-3-pro-preview';
   
   const mimeMatch = base64Image.match(/^data:(image\/\w+);base64,/);
   const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
@@ -17,13 +17,15 @@ export async function generateWebsiteFromImage(
     You are a world-class "Vision-to-Code" specialist. 
     Your mission is to transform a visual blueprint (sketch, photo, or wireframe) into a high-fidelity, functional, and responsive website.
 
-    CORE PRINCIPLES:
-    1. VISUAL FIDELITY: Analyze placement, relative sizes, and spatial relationships accurately.
-    2. TAILWIND CSS: Use Tailwind via CDN: <script src="https://cdn.tailwindcss.com"></script>.
-    3. SINGLE FILE: Return one complete, valid HTML file.
-    4. INTELLIGENT INTERPRETATION: Translate hand-drawn scribbles into polished UI components (buttons, navbars, cards).
-    5. ASSETS: Use descriptive placeholder images from Unsplash (e.g., https://images.unsplash.com/photo-...).
-    6. VANILLA INTERACTIVITY: Use vanilla JS inside <script> tags for basic logic like mobile menus, sliders, or tab switching.
+    STRICT ADHERENCE TO INPUT:
+    1. LAYOUT FIDELITY: You must mirror the exact layout, structure, and spatial relationships shown in the uploaded image. If elements are side-by-side in the sketch, they must be side-by-side in the code.
+    2. CONTENT EXTRACTION: Extract any text written in the sketch and use it as the actual content. Do not use generic filler text if there is legible text in the image.
+    3. ELEMENT RECOGNITION: Correcty identify buttons, input fields, images, and nav items from their hand-drawn shapes.
+    4. TAILWIND CSS: Use Tailwind via CDN: <script src="https://cdn.tailwindcss.com"></script>.
+    5. SINGLE FILE: Return one complete, valid HTML file.
+    6. POLISHED UI: While following the sketch's layout strictly, make the final visual style professional and high-end. Use modern spacing, typography, and colors.
+    7. IMAGES: Use high-quality Unsplash placeholder images (e.g., https://images.unsplash.com/photo-...) that match the context of the user's drawing.
+    8. VANILLA INTERACTIVITY: Use vanilla JS inside <script> tags for basic logic like mobile menus or button clicks.
 
     STRICT OUTPUT RULES:
     - Output ONLY the raw HTML/Tailwind code.
@@ -39,8 +41,8 @@ export async function generateWebsiteFromImage(
   };
 
   const textPart = {
-    text: `Analyze the attached image and generate a website. 
-    User's Specific Instructions: ${prompt || 'Follow the sketch layout closely and make it professional.'}`
+    text: `REPLICATE THIS DESIGN EXACTLY. Look at the positions, labels, and structure.
+    User's Specific Instructions: ${prompt || 'Follow the sketch layout perfectly and make it professional.'}`
   };
 
   try {
@@ -63,7 +65,7 @@ export async function generateWebsiteFromImage(
     
     // Check for quota exhaustion and provide specific guidance
     if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
-      throw new Error("Quota exhausted. Click 'Fix Quota' to use your own API key.");
+      throw new Error("Quota exhausted. Click 'Connect API Key' to use your own API key.");
     }
     
     throw new Error(`Wizard Error: ${error?.message || "Unknown error"}`);
