@@ -6,24 +6,31 @@ import PreviewFrame from './components/PreviewFrame';
 
 type View = 'landing' | 'generator' | 'how-it-works';
 
-// Fix: Define AIStudio interface to match platform expectations
+// Platform interfaces
 interface AIStudio {
   hasSelectedApiKey: () => Promise<boolean>;
   openSelectKey: () => Promise<void>;
 }
 
-// Extend window for AI Studio helpers
 declare global {
+  /* Fix: Ensure aistudio global property is correctly typed and matches expected modifiers */
   interface Window {
-    // Fix: Match the readonly modifier and type name from the environment
-    readonly aistudio: AIStudio;
+    aistudio: AIStudio;
   }
 }
 
 const App: React.FC = () => {
   // Navigation & Theme State
   const [view, setView] = useState<View>('landing');
-  const [isDark, setIsDark] = useState(false);
+  // Initialize from local storage or system preference
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('wizard-theme');
+      if (saved) return saved === 'dark';
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return false;
+  });
   const [hasUserKey, setHasUserKey] = useState(false);
 
   // Generator State
@@ -36,26 +43,37 @@ const App: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Apply Dark Mode & Check Key Status
+  // Apply Dark Mode Effect
   useEffect(() => {
+    const root = window.document.documentElement;
     if (isDark) {
-      document.documentElement.classList.add('dark');
+      root.classList.add('dark');
+      localStorage.setItem('wizard-theme', 'dark');
     } else {
-      document.documentElement.classList.remove('dark');
+      root.classList.remove('dark');
+      localStorage.setItem('wizard-theme', 'light');
     }
-    
+  }, [isDark]);
+
+  // Check AI Studio Key Status
+  useEffect(() => {
     const checkKey = async () => {
       if (window.aistudio) {
-        const has = await window.aistudio.hasSelectedApiKey();
-        setHasUserKey(has);
+        try {
+          const has = await window.aistudio.hasSelectedApiKey();
+          setHasUserKey(has);
+        } catch (e) {
+          console.error("Failed to check API key status", e);
+        }
       }
     };
     checkKey();
-  }, [isDark]);
+  }, []);
 
   const handleOpenKeyPicker = async () => {
     if (window.aistudio) {
       await window.aistudio.openSelectKey();
+      // Assume success as per instructions
       setHasUserKey(true);
       setError(null);
     }
@@ -89,7 +107,6 @@ const App: React.FC = () => {
       setError(msg);
       setStatus(GenerationStatus.ERROR);
       
-      // If we hit a specific "Not Found" error after key selection, reset
       if (msg.includes("Requested entity was not found")) {
         setHasUserKey(false);
       }
@@ -130,7 +147,7 @@ const App: React.FC = () => {
                 onClick={handleOpenKeyPicker}
                 className="px-8 py-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl font-bold text-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-all w-full sm:w-auto"
               >
-                Use Private API Key (Unlimited)
+                Use Private API Key
               </button>
             )}
           </div>
@@ -146,7 +163,7 @@ const App: React.FC = () => {
           { title: "Tailwind Native", desc: "Generated code uses clean, modern Tailwind CSS for easy styling.", icon: "🎨" },
           { title: "Interactive", desc: "Wizard automatically adds basic JS for menus, forms, and tabs.", icon: "🪄" }
         ].map((feat, i) => (
-          <div key={i} className="p-8 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl shadow-sm">
+          <div key={i} className="p-8 bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-3xl shadow-sm transition-transform hover:-translate-y-1">
             <div className="text-3xl mb-4">{feat.icon}</div>
             <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-2">{feat.title}</h3>
             <p className="text-slate-500 dark:text-slate-400 leading-relaxed">{feat.desc}</p>
@@ -169,7 +186,7 @@ const App: React.FC = () => {
             { step: "03", title: "Abracadabra", desc: "Our AI engine analyzes your input and generates production-ready HTML/Tailwind code ready for deployment.", img: "✨" }
           ].map((item, i) => (
             <div key={i} className="flex gap-8 items-start">
-              <div className="text-6xl font-black text-slate-100 dark:text-slate-800 leading-none">{item.step}</div>
+              <div className="text-6xl font-black text-slate-100 dark:text-slate-800 leading-none select-none">{item.step}</div>
               <div>
                 <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-2 flex items-center gap-2">
                   <span>{item.img}</span> {item.title}
@@ -199,7 +216,7 @@ const App: React.FC = () => {
         <section>
           <div className="flex justify-between items-center mb-3">
             <h2 className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest">Step 1: The Blueprint</h2>
-            {hasUserKey && <span className="text-[10px] px-2 py-0.5 bg-green-100 text-green-700 rounded-full font-bold">Premium Active</span>}
+            {hasUserKey && <span className="text-[10px] px-2 py-0.5 bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300 rounded-full font-bold">Premium Mode</span>}
           </div>
           <div 
             onClick={() => fileInputRef.current?.click()}
@@ -231,8 +248,8 @@ const App: React.FC = () => {
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Add special instructions for the Wizard..."
-            className="w-full h-32 p-4 text-sm border dark:border-slate-700 rounded-2xl focus:ring-2 focus:ring-purple-500 outline-none resize-none bg-slate-50 dark:bg-slate-800 dark:text-white"
+            placeholder="Add special instructions for the Wizard... (e.g., 'Make it look like a sci-fi cockpit')"
+            className="w-full h-32 p-4 text-sm border dark:border-slate-700 rounded-2xl focus:ring-2 focus:ring-purple-500 outline-none resize-none bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white transition-colors"
           />
         </section>
 
@@ -276,7 +293,7 @@ const App: React.FC = () => {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 p-4 md:p-8 flex flex-col bg-slate-100 dark:bg-slate-950 transition-colors">
+      <div className="flex-1 p-4 md:p-8 flex flex-col bg-slate-100 dark:bg-slate-950 transition-colors overflow-hidden">
         {generatedCode ? (
           <div className="h-full flex flex-col bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border dark:border-slate-800 overflow-hidden">
             <div className="flex items-center justify-between px-6 py-4 border-b dark:border-slate-800">
@@ -289,15 +306,21 @@ const App: React.FC = () => {
               )}
             </div>
             <div className="flex-1 overflow-hidden">
-              {activeTab === 'preview' ? <div className="h-full p-2"><PreviewFrame code={generatedCode} /></div> : (
-                <div className="h-full bg-slate-950 p-6 overflow-auto font-mono text-sm text-indigo-100"><pre><code>{generatedCode}</code></pre></div>
+              {activeTab === 'preview' ? (
+                <div className="h-full p-2">
+                  <PreviewFrame code={generatedCode} />
+                </div>
+              ) : (
+                <div className="h-full bg-slate-950 p-6 overflow-auto font-mono text-sm text-indigo-100 scrollbar-thin">
+                  <pre><code>{generatedCode}</code></pre>
+                </div>
               )}
             </div>
           </div>
         ) : (
           <div className="h-full flex items-center justify-center">
             <div className="text-center max-w-sm">
-              <div className="w-24 h-24 bg-white dark:bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl text-4xl">✨</div>
+              <div className="w-24 h-24 bg-white dark:bg-slate-900 rounded-full flex items-center justify-center mx-auto mb-6 shadow-xl text-4xl animate-pulse">✨</div>
               <h3 className="text-2xl font-bold text-slate-800 dark:text-white mb-3">Your creation awaits</h3>
               <p className="text-slate-500 dark:text-slate-400 leading-relaxed">The Wizard is ready to materialize your design. Upload a sketch to begin.</p>
             </div>
@@ -308,7 +331,7 @@ const App: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen flex flex-col font-sans selection:bg-purple-100 dark:selection:bg-purple-900/30">
+    <div className="min-h-screen flex flex-col font-sans transition-colors duration-200 bg-slate-50 dark:bg-slate-950">
       {/* Universal Nav */}
       <header className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b dark:border-slate-800 px-6 py-4 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-8">
@@ -331,15 +354,16 @@ const App: React.FC = () => {
           {!hasUserKey && (
             <button 
               onClick={handleOpenKeyPicker}
-              className="hidden lg:flex items-center gap-2 px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-bold text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+              className="hidden lg:flex items-center gap-2 px-3 py-1.5 border border-slate-200 dark:border-slate-700 rounded-lg text-[11px] font-bold text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
             >
-              <span className="w-2 h-2 rounded-full bg-slate-300"></span>
-              Select Private Key
+              <span className="w-2 h-2 rounded-full bg-slate-300 dark:bg-slate-600"></span>
+              Connect API Key
             </button>
           )}
           <button 
             onClick={() => setIsDark(!isDark)}
-            className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:ring-2 ring-purple-500/50 transition-all"
+            aria-label="Toggle dark mode"
+            className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:ring-2 ring-purple-500/50 transition-all active:scale-90"
           >
             {isDark ? (
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M16.243 16.243l.707.707M7.757 7.757l.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" /></svg>
@@ -349,7 +373,7 @@ const App: React.FC = () => {
           </button>
           <button 
             onClick={() => setView('generator')}
-            className="hidden md:block px-5 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl text-sm font-bold transition-transform active:scale-95"
+            className="hidden md:block px-5 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl text-sm font-bold transition-transform active:scale-95 shadow-sm"
           >
             Get Started
           </button>
