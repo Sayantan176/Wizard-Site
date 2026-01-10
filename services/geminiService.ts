@@ -1,12 +1,18 @@
+
 import { GoogleGenAI } from "@google/genai";
+
+export interface ColorPalette {
+  name: string;
+  colors: string[];
+  description: string;
+}
 
 export async function generateWebsiteFromImage(
   base64Image: string,
-  prompt: string
+  prompt: string,
+  palette: ColorPalette
 ): Promise<string> {
-  // Always create a fresh instance to ensure the latest API key is used
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  // gemini-3-flash-preview has much better quota availability for shared environments.
   const model = 'gemini-3-flash-preview';
   
   const mimeMatch = base64Image.match(/^data:(image\/\w+);base64,/);
@@ -17,14 +23,20 @@ export async function generateWebsiteFromImage(
     You are a world-class "Vision-to-Code" specialist. 
     Your mission is to transform a visual blueprint (sketch, photo, or wireframe) into a high-fidelity, functional, and responsive website.
 
-    STRICT FIDELITY REQUIREMENTS:
-    1. VISUAL LAYOUT: You MUST mirror the exact layout, structure, and spatial relationships shown in the uploaded image. If a logo is on the left and a menu on the right, keep them there.
-    2. CONTENT EXTRACTION: Actively look for text, labels, and headings written in the image. Use them as the actual text content of the site.
-    3. ELEMENT RECOGNITION: Identify hand-drawn boxes as cards, circles as avatars/icons, and lines as dividers or text blocks.
-    4. TAILWIND CSS: Use Tailwind via CDN: <script src="https://cdn.tailwindcss.com"></script>.
-    5. SINGLE FILE: Return one complete, valid HTML file with all CSS and JS embedded.
-    6. POLISHED UI: While following the layout strictly, use modern Tailwind design patterns (nice padding, subtle shadows, clean typography) to make it look professional.
-    7. ASSETS: Use descriptive Unsplash URLs for images that match the context of the user's sketch.
+    STRICT FIDELITY & AESTHETIC REQUIREMENTS:
+    1. VISUAL LAYOUT: Mirror the exact spatial relationships shown in the uploaded image. Positions matter.
+    2. COLOR PALETTE: You MUST use the following color theme: "${palette.name}". 
+       Colors to incorporate: ${palette.colors.join(', ')}. 
+       Description: ${palette.description}.
+       Apply these colors to buttons, backgrounds, accents, and borders.
+    3. ANIMATIONS: The user wants a dynamic site. Include CSS and Tailwind animations:
+       - Fade-in or slide-in effects for sections as they appear.
+       - Smooth hover transitions for buttons and cards.
+       - Use 'animate-pulse', 'animate-bounce', or custom @keyframes for key elements.
+    4. CONTENT EXTRACTION: Extract any legible text from the image and use it.
+    5. TAILWIND CSS: Use Tailwind via CDN: <script src="https://cdn.tailwindcss.com"></script>.
+    6. SINGLE FILE: Return one complete, valid HTML file with all CSS and JS embedded.
+    7. IMAGES: Use high-quality Unsplash URLs (https://images.unsplash.com/photo-...) matching the context.
   `;
 
   const imagePart = {
@@ -35,8 +47,8 @@ export async function generateWebsiteFromImage(
   };
 
   const textPart = {
-    text: `CRITICAL: Replicate the layout of the attached image as closely as possible. 
-    User's Instructions: ${prompt || 'Make it a professional website that follows this sketch perfectly.'}`
+    text: `Replicate this sketch perfectly. Use the "${palette.name}" palette and make the site feel alive with animations.
+    User's Instructions: ${prompt || 'Make it a professional, animated website following the sketch layout.'}`
   };
 
   try {
@@ -53,15 +65,12 @@ export async function generateWebsiteFromImage(
       throw new Error("The Wizard returned an empty response.");
     }
 
-    return response.text.trim();
+    return response.text.trim().replace(/^```html/, '').replace(/```$/, '');
   } catch (error: any) {
     console.error("Gemini API Error:", error);
-    
-    // Specifically handle quota errors
     if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
-      throw new Error("Shared quota exhausted. Click 'Connect API Key' to use your own personal key for unlimited access.");
+      throw new Error("Quota exhausted. Click the key icon to connect your own API key.");
     }
-    
     throw new Error(`Wizard Error: ${error?.message || "Unknown error"}`);
   }
 }
