@@ -1,20 +1,33 @@
 
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { generateWebsiteFromImage, ColorPalette } from './services/geminiService';
+import { generateWebsiteFromImage, ColorPalette, GenerationOptions } from './services/geminiService';
 import { GenerationStatus } from './types';
 import PreviewFrame from './components/PreviewFrame';
 
-type View = 'landing' | 'generator' | 'how-it-works';
+type View = 'landing' | 'generator' | 'history';
 type PreviewDevice = 'desktop' | 'mobile';
 
+interface HistoryItem {
+  id: string;
+  timestamp: number;
+  code: string;
+  image: string | null;
+  prompt: string;
+  paletteName: string;
+  fontFamily: string;
+  colors: { primary: string; accent: string };
+}
+
 const PALETTES: ColorPalette[] = [
-  { name: 'Midnight Pro', colors: ['#0f172a', '#334155', '#8b5cf6'], description: 'Sleek dark mode with deep blues and purple accents.' },
-  { name: 'Forest Deep', colors: ['#064e3b', '#065f46', '#10b981'], description: 'Organic emerald and sage tones for a natural look.' },
-  { name: 'Sunset Flare', colors: ['#7c2d12', '#9a3412', '#f97316'], description: 'Warm oranges, ambers, and burnt sienna.' },
-  { name: 'Ocean Deep', colors: ['#1e3a8a', '#1d4ed8', '#0ea5e9'], description: 'Classic professional blues and refreshing cyans.' },
-  { name: 'Royal Gold', colors: ['#1a1a1a', '#451a03', '#fbbf24'], description: 'Elegant black and gold with a premium feel.' },
-  { name: 'Minimalist', colors: ['#ffffff', '#f1f5f9', '#0f172a'], description: 'Clean white space with high-contrast slate text.' },
+  { name: 'Midnight Pro', colors: ['#0f172a', '#334155', '#8b5cf6'], description: 'Sleek dark mode with deep blues.' },
+  { name: 'Forest Deep', colors: ['#064e3b', '#065f46', '#10b981'], description: 'Organic emerald and sage.' },
+  { name: 'Sunset Flare', colors: ['#7c2d12', '#9a3412', '#f97316'], description: 'Warm oranges and ambers.' },
+  { name: 'Ocean Deep', colors: ['#1e3a8a', '#1d4ed8', '#0ea5e9'], description: 'Professional blues.' },
+  { name: 'Royal Gold', colors: ['#1a1a1a', '#451a03', '#fbbf24'], description: 'Elegant black and gold.' },
+  { name: 'Minimalist', colors: ['#ffffff', '#f1f5f9', '#0f172a'], description: 'Clean white space.' },
 ];
+
+const FONTS = ['Inter', 'Roboto', 'Playfair Display', 'Montserrat', 'Merriweather', 'Space Grotesk', 'Fira Code', 'Lora', 'Poppins'];
 
 const App: React.FC = () => {
   const [view, setView] = useState<View>('landing');
@@ -31,60 +44,78 @@ const App: React.FC = () => {
   const [image, setImage] = useState<string | null>(null);
   const [prompt, setPrompt] = useState('');
   const [selectedPalette, setSelectedPalette] = useState<ColorPalette>(PALETTES[0]);
+  const [selectedFont, setSelectedFont] = useState(FONTS[0]);
+  const [customColors, setCustomColors] = useState({ primary: PALETTES[0].colors[0], accent: PALETTES[0].colors[2] });
+  const [useCustomColors, setUseCustomColors] = useState(false);
+  
   const [generatedCode, setGeneratedCode] = useState<string>('');
   const [status, setStatus] = useState<GenerationStatus>(GenerationStatus.IDLE);
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview');
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('desktop');
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  // Editor State
+  const [isEditing, setIsEditing] = useState(false);
+  const [selectedElementData, setSelectedElementData] = useState<{ tag: string; colors: { bg: string; text: string }; textContent: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const savedHistory = localStorage.getItem('wizard-history');
+    if (savedHistory) setHistory(JSON.parse(savedHistory));
+
     const root = window.document.documentElement;
-    if (isDark) {
-      root.classList.add('dark');
-      localStorage.setItem('wizard-theme', 'dark');
-    } else {
-      root.classList.remove('dark');
-      localStorage.setItem('wizard-theme', 'light');
-    }
+    if (isDark) root.classList.add('dark');
+    else root.classList.remove('dark');
   }, [isDark]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setShowExportMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  useEffect(() => {
+    let interval: any;
+    if (status === GenerationStatus.LOADING) {
+      setProgress(0);
+      interval = setInterval(() => {
+        setProgress((prev) => {
+          if (prev >= 99) return 99;
+          return +(prev + (prev < 30 ? 3 : prev < 70 ? 1 : 0.2)).toFixed(1);
+        });
+      }, 100);
+    } else if (status === GenerationStatus.SUCCESS) {
+      setProgress(100);
+    }
+    return () => clearInterval(interval);
+  }, [status]);
+
+  const toggleTheme = () => {
+    const next = !isDark;
+    setIsDark(next);
+    localStorage.setItem('wizard-theme', next ? 'dark' : 'light');
+  };
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setImage(reader.result as string);
-      };
+      reader.onloadend = () => setImage(reader.result as string);
       reader.readAsDataURL(file);
     }
   };
 
-  const handleGenerate = async () => {
-    if (!image) {
-      setError("Please upload a sketch first.");
-      return;
-    }
-    setStatus(GenerationStatus.LOADING);
-    setError(null);
-    try {
-      const code = await generateWebsiteFromImage(image, prompt, selectedPalette);
-      setGeneratedCode(code);
-      setStatus(GenerationStatus.SUCCESS);
-      setActiveTab('preview');
-    } catch (err: any) {
-      setError(err instanceof Error ? err.message : "An unexpected error occurred.");
-      setStatus(GenerationStatus.ERROR);
-    }
-  };
-
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(generatedCode);
-  };
-
   const downloadFile = (content: string, fileName: string, contentType: string) => {
-    const a = document.createElement("a");
+    const a = document.createElement('a');
     const file = new Blob([content], { type: contentType });
     a.href = URL.createObjectURL(file);
     a.download = fileName;
@@ -92,151 +123,138 @@ const App: React.FC = () => {
     URL.revokeObjectURL(a.href);
   };
 
-  const handleDownloadHTML = () => {
-    downloadFile(generatedCode, "wizard-site.html", "text/html");
+  const handleDownload = (type: 'html' | 'css' | 'js') => {
+    if (!generatedCode) return;
+    
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(generatedCode, 'text/html');
+
+    if (type === 'html') {
+      downloadFile(generatedCode, 'index.html', 'text/html');
+    } else if (type === 'css') {
+      const styles = Array.from(doc.querySelectorAll('style')).map(s => s.innerHTML).join('\n\n');
+      downloadFile(styles || '/* No custom styles found */', 'style.css', 'text/css');
+    } else if (type === 'js') {
+      const scripts = Array.from(doc.querySelectorAll('script:not([src])'))
+        .filter(s => !s.id.includes('wizard-editor-runtime'))
+        .map(s => s.innerHTML).join('\n\n');
+      downloadFile(scripts || '/* No custom scripts found */', 'script.js', 'text/javascript');
+    }
+    setShowExportMenu(false);
   };
 
-  const handleDownloadCSS = () => {
-    // Extract CSS from style tags
-    const styleRegex = /<style[^>]*>([\s\S]*?)<\/style>/gi;
-    let match;
-    let cssContent = "/* Generated by Wizard - Sketch to Site */\n\n";
-    let found = false;
-    while ((match = styleRegex.exec(generatedCode)) !== null) {
-      cssContent += match[1].trim() + "\n\n";
-      found = true;
-    }
-    
-    if (!found) {
-      cssContent += "/* No custom CSS styles were found in the generated HTML. */\n";
-      cssContent += "/* This site primarily uses Tailwind CSS utility classes via CDN. */\n";
-    }
-
-    downloadFile(cssContent, "styles.css", "text/css");
+  const saveToHistory = (code: string) => {
+    const newItem: HistoryItem = {
+      id: Math.random().toString(36).substr(2, 9),
+      timestamp: Date.now(),
+      code,
+      image,
+      prompt,
+      paletteName: selectedPalette.name,
+      fontFamily: selectedFont,
+      colors: useCustomColors ? customColors : { primary: selectedPalette.colors[0], accent: selectedPalette.colors[2] }
+    };
+    const updated = [newItem, ...history].slice(0, 20);
+    setHistory(updated);
+    localStorage.setItem('wizard-history', JSON.stringify(updated));
   };
 
-  const handleDownloadJS = () => {
-    // Extract JS from script tags
-    const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi;
-    let match;
-    let jsContent = "/* Generated by Wizard - Sketch to Site */\n\n";
-    let found = false;
-    while ((match = scriptRegex.exec(generatedCode)) !== null) {
-      // Avoid taking the Tailwind CDN script
-      if (match[0].includes('cdn.tailwindcss.com')) continue;
-      
-      jsContent += match[1].trim() + "\n\n";
-      found = true;
-    }
-    
-    if (!found) {
-      jsContent += "/* No custom JavaScript was found in the generated HTML. */\n";
-    }
+  const loadFromHistory = (item: HistoryItem) => {
+    setGeneratedCode(item.code);
+    setImage(item.image);
+    setPrompt(item.prompt);
+    setSelectedFont(item.fontFamily);
+    const palette = PALETTES.find(p => p.name === item.paletteName) || PALETTES[0];
+    setSelectedPalette(palette);
+    setCustomColors(item.colors);
+    setUseCustomColors(true);
+    setView('generator');
+    setActiveTab('preview');
+    setIsEditing(false);
+  };
 
-    downloadFile(jsContent, "script.js", "text/javascript");
+  const handleGenerate = async () => {
+    if (!image) { setError("Please upload a sketch first."); return; }
+    setStatus(GenerationStatus.LOADING);
+    setError(null);
+    setIsEditing(false);
+    try {
+      const code = await generateWebsiteFromImage({
+        image, prompt, palette: selectedPalette, fontFamily: selectedFont,
+        customColors: useCustomColors ? customColors : undefined
+      });
+      setGeneratedCode(code);
+      saveToHistory(code);
+      setStatus(GenerationStatus.SUCCESS);
+      setActiveTab('preview');
+    } catch (err: any) {
+      setError(err instanceof Error ? err.message : "An error occurred.");
+      setStatus(GenerationStatus.ERROR);
+    }
+  };
+
+  const addElementToSite = (tag: string, text: string, className: string) => {
+    const iframe = document.querySelector('iframe');
+    iframe?.contentWindow?.postMessage({ type: 'ADD_ELEMENT', payload: { tag, text, className } }, '*');
+  };
+
+  const pickColor = async (target: 'primary' | 'accent' | 'edit-bg' | 'edit-text') => {
+    if (!('EyeDropper' in window)) { alert("Eyedropper tool not supported."); return; }
+    try {
+      // @ts-ignore
+      const eyeDropper = new EyeDropper();
+      const result = await eyeDropper.open();
+      if (target === 'primary' || target === 'accent') {
+        setCustomColors({ ...customColors, [target]: result.sRGBHex });
+      } else {
+        const key = target === 'edit-bg' ? 'backgroundColor' : 'color';
+        const iframe = document.querySelector('iframe');
+        iframe?.contentWindow?.postMessage({ type: 'UPDATE_STYLE', payload: { key, value: result.sRGBHex } }, '*');
+      }
+    } catch (e) { console.log("Cancelled"); }
+  };
+
+  const deleteElement = () => {
+    const iframe = document.querySelector('iframe');
+    iframe?.contentWindow?.postMessage({ type: 'DELETE_ELEMENT' }, '*');
+    setSelectedElementData(null);
   };
 
   const renderLanding = () => (
-    <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 transition-colors">
-      <section className="relative py-32 px-6 max-w-7xl mx-auto text-center">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-full opacity-20 pointer-events-none overflow-hidden">
-          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-purple-600 rounded-full blur-[100px] animate-pulse"></div>
-          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600 rounded-full blur-[100px] animate-pulse delay-700"></div>
+    <div className="flex-1 overflow-y-auto bg-white dark:bg-slate-950 flex flex-col items-center justify-center p-8 text-center">
+      <div className="max-w-4xl space-y-8 animate-in fade-in zoom-in duration-700">
+        <div className="inline-block p-4 rounded-3xl bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 mb-4 ring-8 ring-purple-50 dark:ring-purple-900/10">
+          <svg className="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
         </div>
-        
-        <div className="relative z-10 animate-in fade-in slide-in-from-bottom-8 duration-700">
-          <span className="inline-flex items-center gap-2 py-1.5 px-4 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 text-sm font-bold mb-8 ring-1 ring-purple-200 dark:ring-purple-700/50">
-            Visionary Web Prototyping
-          </span>
-          <h1 className="text-6xl md:text-8xl font-black tracking-tight text-slate-900 dark:text-white mb-8 leading-[1.1]">
-            Sketches into <br/>
-            <span className="bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 bg-clip-text text-transparent drop-shadow-sm">Beautiful Sites.</span>
-          </h1>
-          <p className="text-xl md:text-2xl text-slate-600 dark:text-slate-400 max-w-2xl mx-auto mb-12 font-medium leading-relaxed">
-            Upload your hand-drawn wireframes and watch the Wizard craft animated, pixel-perfect Tailwind websites instantly.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-6 justify-center items-center">
-            <button 
-              onClick={() => setView('generator')}
-              className="group px-10 py-5 bg-slate-900 dark:bg-white text-white dark:text-slate-950 rounded-2xl font-black text-xl shadow-2xl hover:scale-105 active:scale-95 transition-all w-full sm:w-auto flex items-center gap-3"
-            >
-              Start Creating
-              <svg className="w-6 h-6 group-hover:translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
-            </button>
-            <button 
-              onClick={() => setView('how-it-works')}
-              className="px-10 py-5 bg-white/50 dark:bg-slate-800/50 backdrop-blur-sm border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-2xl font-bold text-xl hover:bg-white dark:hover:bg-slate-800 transition-all w-full sm:w-auto"
-            >
-              How it Works
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="py-24 px-6 max-w-7xl mx-auto grid md:grid-cols-3 gap-10">
-        {[
-          { title: "Dynamic Themes", desc: "Select from curated palettes to instantly style your generated prototypes.", icon: "🎨" },
-          { title: "Responsive Toggles", desc: "Preview your magic in both desktop and mobile views with one click.", icon: "📱" },
-          { title: "Clean Exports", desc: "Download your creation as ready-to-use HTML, CSS, and JS files.", icon: "💾" }
-        ].map((feat, i) => (
-          <div key={i} className="group p-10 bg-white dark:bg-slate-900 border border-slate-200/50 dark:border-slate-800/50 rounded-[2rem] shadow-sm hover:shadow-2xl hover:-translate-y-2 transition-all duration-300">
-            <div className="text-5xl mb-6 transition-transform group-hover:scale-125 duration-300">{feat.icon}</div>
-            <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">{feat.title}</h3>
-            <p className="text-slate-500 dark:text-slate-400 leading-relaxed text-lg">{feat.desc}</p>
-          </div>
-        ))}
-      </section>
-    </div>
-  );
-
-  const renderHowItWorks = () => (
-    <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 transition-colors animate-in fade-in">
-      <div className="max-w-4xl mx-auto py-20 px-6">
-        <h2 className="text-5xl font-black text-slate-900 dark:text-white mb-6">How the Magic Happens</h2>
-        <p className="text-xl text-slate-600 dark:text-slate-400 mb-16 leading-relaxed">
-          Wizard isn't just a simple OCR tool. It leverages multi-modal AI reasoning to understand design intent, spatial hierarchy, and user experience.
+        <h1 className="text-6xl md:text-8xl font-black tracking-tighter dark:text-white leading-[0.9]">
+          Paper to <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-indigo-600">Product</span> in Seconds.
+        </h1>
+        <p className="text-xl md:text-2xl text-slate-500 dark:text-slate-400 font-medium max-w-2xl mx-auto">
+          The ultimate AI design-to-code companion. Upload your hand-drawn sketch and watch the Wizard conjure a high-fidelity website instantly.
         </p>
-
-        <div className="space-y-12">
-          {[
-            {
-              title: "1. Visual Decomposition",
-              desc: "When you upload an image, Gemini's vision model analyzes the pixels to identify layout patterns. It looks for rectangles as cards, circles as icons, and lines as headings. It maps the 'Spatial Coordinates' of every element to maintain structural fidelity.",
-              icon: "🔍"
-            },
-            {
-              title: "2. Design Semantics",
-              desc: "The Wizard interprets your hand-drawn intent. A button isn't just a box; the AI recognizes it as a functional CTA. It extracts legible text and uses context to suggest high-quality placeholder images from Unsplash that match your theme.",
-              icon: "🧠"
-            },
-            {
-              title: "3. The Animation Ritual",
-              desc: "Static code is boring. Our engine automatically injects 'Entrance Rituals'—CSS keyframes and Tailwind utility classes—that trigger as users scroll, giving your prototype a production-grade feel.",
-              icon: "✨"
-            },
-            {
-              title: "4. Code Transmutation",
-              desc: "Finally, it synthesizes everything into a single-file Tailwind CSS build. This code is clean, semantic, and ready to be pasted into any modern web environment or hosted as a standalone prototype.",
-              icon: "🔨"
-            }
-          ].map((item, i) => (
-            <div key={i} className="flex flex-col md:flex-row gap-8 p-8 bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-sm border border-slate-100 dark:border-slate-800">
-              <div className="text-5xl shrink-0">{item.icon}</div>
-              <div>
-                <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-3">{item.title}</h3>
-                <p className="text-slate-600 dark:text-slate-400 leading-relaxed text-lg">{item.desc}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-20 text-center">
-          <button 
-            onClick={() => setView('generator')}
-            className="px-10 py-5 bg-purple-600 text-white rounded-2xl font-black text-xl shadow-xl shadow-purple-200 dark:shadow-none hover:scale-105 active:scale-95 transition-all"
-          >
-            Start Building Now
+        <div className="flex flex-col sm:flex-row gap-4 justify-center pt-8">
+          <button onClick={() => setView('generator')} className="px-10 py-5 bg-purple-600 text-white rounded-2xl font-black text-xl hover:scale-105 transition-all shadow-2xl shadow-purple-500/20 active:scale-95">
+            Start Conjuring
           </button>
+          <button onClick={() => setView('history')} className="px-10 py-5 bg-white dark:bg-slate-900 border-2 dark:border-slate-800 text-slate-900 dark:text-white rounded-2xl font-black text-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-all active:scale-95">
+            View Archive
+          </button>
+        </div>
+        <div className="pt-16 grid grid-cols-1 sm:grid-cols-3 gap-8 text-left border-t dark:border-slate-800">
+          <div>
+            <h4 className="font-black text-purple-600 dark:text-purple-400 text-xs uppercase tracking-widest mb-2">Vision-to-HTML</h4>
+            <p className="text-sm text-slate-500">Perfectly replicate your hand-drawn sketches with AI vision.</p>
+          </div>
+          <div>
+            <h4 className="font-black text-purple-600 dark:text-purple-400 text-xs uppercase tracking-widest mb-2">Live Editor</h4>
+            <p className="text-sm text-slate-500">Modify elements, change colors, and reorder sections in real-time.</p>
+          </div>
+          <div>
+            <h4 className="font-black text-purple-600 dark:text-purple-400 text-xs uppercase tracking-widest mb-2">Clean Export</h4>
+            <p className="text-sm text-slate-500">Get production-ready Tailwind CSS and semantic HTML5.</p>
+          </div>
         </div>
       </div>
     </div>
@@ -244,179 +262,202 @@ const App: React.FC = () => {
 
   const renderGenerator = () => (
     <div className="flex-1 flex flex-col md:flex-row overflow-hidden bg-slate-100 dark:bg-slate-950">
-      <div className="w-full md:w-1/3 lg:w-[22%] border-r dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col overflow-y-auto p-8 gap-8 transition-colors">
-        <section>
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Step 1: The Sketch</h2>
-          </div>
-          <div 
-            onClick={() => fileInputRef.current?.click()}
-            className={`group relative border-2 border-dashed rounded-3xl p-8 flex flex-col items-center justify-center cursor-pointer transition-all duration-300 ${
-              image ? 'border-purple-400 bg-purple-50 dark:bg-purple-900/10' : 'border-slate-200 dark:border-slate-700 hover:border-purple-500 hover:bg-slate-50 dark:hover:bg-slate-800'
-            }`}
-          >
-            {image ? (
-              <div className="w-full flex flex-col items-center gap-4">
-                <img src={image} alt="Upload preview" className="max-h-60 rounded-2xl shadow-xl object-contain ring-4 ring-white dark:ring-slate-800" />
-                <span className="text-sm text-purple-600 font-bold group-hover:underline">Replace Drawing</span>
+      <div className="w-full md:w-1/3 lg:w-[25%] border-r dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col overflow-y-auto p-6 gap-8 scrollbar-none">
+        
+        {isEditing && generatedCode ? (
+          <div className="flex flex-col gap-6 animate-in slide-in-from-left-4 duration-500">
+            <header className="flex items-center justify-between border-b pb-4 dark:border-slate-800">
+              <h2 className="text-xs font-black text-purple-600 dark:text-purple-400 uppercase tracking-widest">Editor Panel</h2>
+              <button onClick={() => setIsEditing(false)} className="text-xs font-bold text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors">BACK</button>
+            </header>
+
+            <section className="space-y-4">
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-widest">Create Magic</h3>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={() => addElementToSite('h2', 'New Heading', 'text-4xl font-black mb-4')} className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl border text-xs font-bold hover:border-purple-500 transition-all">+ Heading</button>
+                <button onClick={() => addElementToSite('p', 'New Paragraph text goes here.', 'text-slate-600 mb-4')} className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl border text-xs font-bold hover:border-purple-500 transition-all">+ Paragraph</button>
+                <button onClick={() => addElementToSite('button', 'Get Started', 'px-6 py-2 bg-purple-600 text-white rounded-full font-bold')} className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl border text-xs font-bold hover:border-purple-500 transition-all">+ Button</button>
+                <button onClick={() => addElementToSite('div', '', 'w-full h-64 bg-slate-200 rounded-2xl flex items-center justify-center')} className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl border text-xs font-bold hover:border-purple-500 transition-all">+ Section</button>
               </div>
-            ) : (
-              <div className="text-center">
-                <div className="w-16 h-16 bg-slate-100 dark:bg-slate-800 rounded-3xl flex items-center justify-center mx-auto mb-4 group-hover:scale-110 transition-transform">
-                  <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+            </section>
+
+            {selectedElementData ? (
+              <section className="space-y-6 pt-6 border-t dark:border-slate-800 animate-in fade-in">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-black text-purple-600 uppercase tracking-widest">Editing: {selectedElementData.tag}</h3>
+                  <button onClick={deleteElement} className="text-xs font-bold text-red-500 hover:underline">Delete</button>
                 </div>
-                <p className="text-sm font-bold text-slate-500">Drop your sketch here</p>
-                <p className="text-xs text-slate-400 mt-1">PNG, JPG or SVG</p>
+                
+                <div className="space-y-4">
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[10px] font-black text-slate-500 uppercase">Colors</label>
+                    <div className="flex gap-4">
+                      <div className="flex-1 flex flex-col gap-1">
+                        <span className="text-[9px] text-slate-400">Background</span>
+                        <div className="flex gap-1">
+                          <input type="color" value={selectedElementData.colors.bg === 'rgba(0, 0, 0, 0)' ? '#ffffff' : selectedElementData.colors.bg} onChange={(e) => {
+                            const iframe = document.querySelector('iframe');
+                            iframe?.contentWindow?.postMessage({ type: 'UPDATE_STYLE', payload: { key: 'backgroundColor', value: e.target.value } }, '*');
+                          }} className="h-8 w-8 rounded cursor-pointer" />
+                          <button onClick={() => pickColor('edit-bg')} className="p-1.5 bg-slate-100 dark:bg-slate-800 rounded"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7V3m0 0L8 5m2-2l2 2" /></svg></button>
+                        </div>
+                      </div>
+                      <div className="flex-1 flex flex-col gap-1">
+                        <span className="text-[9px] text-slate-400">Text</span>
+                        <div className="flex gap-1">
+                          <input type="color" value={selectedElementData.colors.text} onChange={(e) => {
+                            const iframe = document.querySelector('iframe');
+                            iframe?.contentWindow?.postMessage({ type: 'UPDATE_STYLE', payload: { key: 'color', value: e.target.value } }, '*');
+                          }} className="h-8 w-8 rounded cursor-pointer" />
+                          <button onClick={() => pickColor('edit-text')} className="p-1.5 bg-slate-100 dark:bg-slate-800 rounded"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7V3m0 0L8 5m2-2l2 2" /></svg></button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-500 bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl">Tip: You can edit text directly in the preview and drag elements to reorder them.</p>
+                </div>
+              </section>
+            ) : (
+              <div className="py-10 text-center border-2 border-dashed rounded-3xl dark:border-slate-800">
+                <p className="text-slate-400 text-xs font-bold uppercase tracking-widest px-6">Select any element to style it</p>
               </div>
             )}
-            <input type="file" ref={fileInputRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
+            
+            <button onClick={() => setIsEditing(false)} className="mt-auto w-full py-4 rounded-2xl bg-purple-600 text-white font-black hover:bg-purple-700 transition-all shadow-xl shadow-purple-500/20">Finalize Magic</button>
           </div>
-        </section>
+        ) : (
+          <>
+            <section>
+              <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">1. Upload Vision</h2>
+              <div onClick={() => fileInputRef.current?.click()} className={`border-2 border-dashed rounded-3xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all ${image ? 'border-purple-400 bg-purple-50 dark:bg-purple-900/10' : 'border-slate-200 dark:border-slate-700 hover:border-purple-500'}`}>
+                {image ? <img src={image} className="max-h-40 rounded-xl shadow-lg" /> : <div className="text-center py-4 text-slate-400"><svg className="w-10 h-10 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4" /></svg><p className="text-xs font-bold">Add Sketch</p></div>}
+                <input type="file" ref={fileInputRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
+              </div>
+            </section>
 
-        <section>
-          <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Step 2: The Palette</h2>
-          <div className="grid grid-cols-2 gap-3">
-            {PALETTES.map((p) => (
-              <button
-                key={p.name}
-                onClick={() => setSelectedPalette(p)}
-                className={`flex flex-col gap-2 p-3 rounded-2xl border-2 transition-all text-left ${
-                  selectedPalette.name === p.name 
-                    ? 'border-purple-600 bg-purple-50 dark:bg-purple-900/20' 
-                    : 'border-slate-100 dark:border-slate-800 hover:border-slate-200 dark:hover:border-slate-700'
-                }`}
-              >
-                <div className="flex gap-1">
-                  {p.colors.map((c, i) => (
-                    <div key={i} className="w-full h-3 rounded-full" style={{ backgroundColor: c }} />
+            <section>
+              <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">2. Typography</h2>
+              <select value={selectedFont} onChange={(e) => setSelectedFont(e.target.value)} className="w-full p-4 rounded-2xl border bg-slate-50 dark:bg-slate-800 dark:border-slate-700 font-bold outline-none focus:border-purple-500 transition-all">
+                {FONTS.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </section>
+
+            <section>
+              <div className="flex justify-between items-center mb-3">
+                <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest">3. Colors</h2>
+                <button onClick={() => setUseCustomColors(!useCustomColors)} className="text-[10px] font-black text-purple-600 uppercase underline decoration-2">{useCustomColors ? 'Presets' : 'Custom'}</button>
+              </div>
+              {useCustomColors ? (
+                <div className="grid grid-cols-1 gap-3">
+                  {['primary', 'accent'].map(k => (
+                    <div key={k} className="flex gap-2">
+                      <div className="relative h-12 w-16 shrink-0 rounded-xl overflow-hidden border">
+                        <input type="color" value={(customColors as any)[k]} onChange={(e) => setCustomColors({...customColors, [k]: e.target.value})} className="absolute inset-0 scale-[3] cursor-pointer" />
+                      </div>
+                      <input type="text" value={(customColors as any)[k]} onChange={(e) => setCustomColors({...customColors, [k]: e.target.value})} className="flex-1 p-3 rounded-xl border bg-slate-50 dark:bg-slate-800 dark:border-slate-700 font-mono text-sm uppercase outline-none focus:border-purple-500" />
+                      <button onClick={() => pickColor(k as any)} className="p-3 rounded-xl bg-slate-100 dark:bg-slate-800"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7V3m0 0L8 5m2-2l2 2" /></svg></button>
+                    </div>
                   ))}
                 </div>
-                <span className={`text-[11px] font-bold ${selectedPalette.name === p.name ? 'text-purple-600 dark:text-purple-400' : 'text-slate-500'}`}>
-                  {p.name}
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>
+              ) : (
+                <div className="grid grid-cols-2 gap-2">
+                  {PALETTES.map(p => (
+                    <button key={p.name} onClick={() => setSelectedPalette(p)} className={`p-2 rounded-xl border transition-all text-left ${selectedPalette.name === p.name ? 'border-purple-600 bg-purple-50 dark:bg-purple-900/10' : 'border-slate-100 dark:border-slate-800 hover:border-slate-300'}`}>
+                      <div className="flex gap-1 mb-1">{p.colors.map((c, i) => <div key={i} className="h-2 flex-1 rounded-full" style={{ backgroundColor: c }} />)}</div>
+                      <span className="text-[10px] font-black uppercase tracking-tighter truncate block">{p.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
 
-        <section>
-          <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Step 3: Magic Words</h2>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder="e.g. 'Use a futuristic font', 'Add a gallery section'..."
-            className="w-full h-28 p-5 text-sm border-2 border-slate-100 dark:border-slate-800 rounded-3xl focus:border-purple-500 outline-none resize-none bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white transition-all"
-          />
-        </section>
+            <section>
+              <h2 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-3">4. Refining the Spell</h2>
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="e.g. Add a navigation bar, make it look modern and sleek..."
+                className="w-full h-32 p-4 text-sm border bg-slate-50 dark:bg-slate-800 dark:border-slate-700 rounded-3xl focus:border-purple-500 outline-none resize-none transition-all dark:text-white"
+              />
+            </section>
 
-        <button
-          onClick={handleGenerate}
-          disabled={status === GenerationStatus.LOADING || !image}
-          className={`w-full py-5 rounded-3xl font-black text-lg text-white transition-all flex items-center justify-center gap-3 shadow-xl ${
-            status === GenerationStatus.LOADING || !image
-              ? 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed shadow-none'
-              : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:scale-[1.03] active:scale-95 shadow-purple-200 dark:shadow-none'
-          }`}
-        >
-          {status === GenerationStatus.LOADING ? (
-            <>
-              <svg className="animate-spin h-6 w-6" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-              Conjuring...
-            </>
-          ) : "Generate Site"}
-        </button>
-
-        {error && (
-          <div className="p-5 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 text-sm rounded-3xl border-2 border-red-100 dark:border-red-900/30">
-            <p className="font-medium">{error}</p>
-          </div>
+            <button onClick={handleGenerate} disabled={status === GenerationStatus.LOADING || !image} className={`w-full py-4 rounded-2xl font-black text-lg text-white transition-all shadow-xl ${status === GenerationStatus.LOADING || !image ? 'bg-slate-200 dark:bg-slate-800 cursor-not-allowed' : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:scale-105 active:scale-95'}`}>
+              {status === GenerationStatus.LOADING ? <div className="flex items-center justify-center gap-3"><svg className="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>{progress}%</div> : "Conjure Site"}
+            </button>
+          </>
         )}
       </div>
 
-      <div className="flex-1 p-6 md:p-10 flex flex-col overflow-hidden">
-        {generatedCode ? (
-          <div className="h-full flex flex-col bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl border dark:border-slate-800 overflow-hidden animate-in zoom-in-95 duration-500">
-            <div className="flex flex-wrap items-center justify-between px-8 py-5 border-b dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 gap-4">
-              <div className="flex bg-slate-200/50 dark:bg-slate-800/50 p-1.5 rounded-2xl gap-1">
-                <button 
-                  onClick={() => setActiveTab('preview')} 
-                  className={`px-6 py-2 text-sm font-black rounded-xl transition-all ${activeTab === 'preview' ? 'bg-white dark:bg-slate-700 text-purple-600 dark:text-white shadow-md' : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'}`}
-                >
-                  PREVIEW
-                </button>
-                <button 
-                  onClick={() => setActiveTab('code')} 
-                  className={`px-6 py-2 text-sm font-black rounded-xl transition-all ${activeTab === 'code' ? 'bg-white dark:bg-slate-700 text-purple-600 dark:text-white shadow-md' : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'}`}
-                >
-                  CODE
-                </button>
-              </div>
+      <div className="flex-1 p-4 md:p-8 flex flex-col relative overflow-hidden">
+        {status === GenerationStatus.LOADING && (
+          <div className="absolute inset-0 z-20 bg-white/80 dark:bg-slate-950/90 backdrop-blur-xl flex flex-col items-center justify-center animate-in fade-in">
+            <div className="relative w-40 h-40 mb-8 flex items-center justify-center">
+              <div className="absolute inset-0 rounded-full border-4 border-slate-100 dark:border-slate-800"></div>
+              <div className="absolute inset-0 rounded-full border-4 border-purple-600 border-t-transparent animate-spin"></div>
+              <span className="text-3xl font-black">{Math.floor(progress)}%</span>
+            </div>
+            <h3 className="text-2xl font-black tracking-tight mb-2">Architecting Reality...</h3>
+            <p className="text-slate-500 font-medium">Mixing CSS spells and HTML nodes</p>
+          </div>
+        )}
 
-              {activeTab === 'preview' && (
-                <div className="hidden sm:flex bg-slate-200/50 dark:bg-slate-800/50 p-1 rounded-xl">
-                  <button 
-                    onClick={() => setPreviewDevice('desktop')}
-                    className={`p-2 rounded-lg transition-all ${previewDevice === 'desktop' ? 'bg-white dark:bg-slate-700 text-purple-600 dark:text-white shadow-sm' : 'text-slate-400'}`}
-                    title="Desktop Mode"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-                  </button>
-                  <button 
-                    onClick={() => setPreviewDevice('mobile')}
-                    className={`p-2 rounded-lg transition-all ${previewDevice === 'mobile' ? 'bg-white dark:bg-slate-700 text-purple-600 dark:text-white shadow-sm' : 'text-slate-400'}`}
-                    title="Mobile Mode"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
-                  </button>
-                </div>
-              )}
+        {generatedCode ? (
+          <div className="h-full flex flex-col bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl border dark:border-slate-800 overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between px-6 py-4 border-b dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50 gap-4">
+              <div className="flex bg-slate-200/50 dark:bg-slate-800/50 p-1 rounded-2xl gap-1">
+                <button onClick={() => { setActiveTab('preview'); setIsEditing(false); }} className={`px-4 py-2 text-xs font-black rounded-xl transition-all ${activeTab === 'preview' && !isEditing ? 'bg-white dark:bg-slate-700 text-purple-600 dark:text-white shadow-sm' : 'text-slate-500'}`}>PREVIEW</button>
+                <button onClick={() => { setActiveTab('preview'); setIsEditing(true); }} className={`px-4 py-2 text-xs font-black rounded-xl transition-all ${isEditing ? 'bg-purple-600 text-white shadow-sm' : 'text-slate-500'}`}>LIVE EDITOR</button>
+                <button onClick={() => { setActiveTab('code'); setIsEditing(false); }} className={`px-4 py-2 text-xs font-black rounded-xl transition-all ${activeTab === 'code' ? 'bg-white dark:bg-slate-700 text-purple-600 dark:text-white shadow-sm' : 'text-slate-500'}`}>SOURCE</button>
+              </div>
 
               <div className="flex items-center gap-3">
-                <button 
-                  onClick={copyToClipboard} 
-                  className="flex items-center gap-2 px-3 py-2 text-xs font-black text-slate-500 hover:text-purple-600 dark:hover:text-purple-400 transition-colors uppercase tracking-widest"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2" /></svg>
-                  Copy
-                </button>
-                <div className="w-px h-6 bg-slate-200 dark:bg-slate-800"></div>
-                <button 
-                  onClick={handleDownloadHTML}
-                  className="flex items-center gap-2 px-3 py-2 text-xs font-black text-slate-500 hover:text-purple-600 dark:hover:text-purple-400 transition-colors uppercase tracking-widest"
-                  title="Download HTML"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
-                  HTML
-                </button>
-                <button 
-                  onClick={handleDownloadCSS}
-                  className="flex items-center gap-2 px-3 py-2 text-xs font-black text-slate-500 hover:text-purple-600 dark:hover:text-purple-400 transition-colors uppercase tracking-widest"
-                  title="Download CSS"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
-                  CSS
-                </button>
-                <button 
-                  onClick={handleDownloadJS}
-                  className="flex items-center gap-2 px-3 py-2 text-xs font-black text-slate-500 hover:text-purple-600 dark:hover:text-purple-400 transition-colors uppercase tracking-widest"
-                  title="Download JS"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
-                  JS
-                </button>
+                {!isEditing && activeTab === 'preview' && (
+                  <div className="flex bg-slate-200/50 dark:bg-slate-800/50 p-1 rounded-xl">
+                    <button onClick={() => setPreviewDevice('desktop')} className={`p-2 rounded-lg ${previewDevice === 'desktop' ? 'bg-white dark:bg-slate-700 text-purple-600 dark:text-white shadow-sm' : 'text-slate-400'}`}><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg></button>
+                    <button onClick={() => setPreviewDevice('mobile')} className={`p-2 rounded-lg ${previewDevice === 'mobile' ? 'bg-white dark:bg-slate-700 text-purple-600 dark:text-white shadow-sm' : 'text-slate-400'}`}><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg></button>
+                  </div>
+                )}
+
+                <div className="relative" ref={exportMenuRef}>
+                  <button 
+                    onClick={() => setShowExportMenu(!showExportMenu)}
+                    className="flex items-center gap-2 px-4 py-2 bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 rounded-xl text-xs font-black hover:scale-105 active:scale-95 transition-all shadow-lg shadow-slate-900/10"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                    EXPORT
+                  </button>
+                  
+                  {showExportMenu && (
+                    <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border dark:border-slate-800 z-30 py-2 animate-in fade-in zoom-in duration-200">
+                      <button onClick={() => handleDownload('html')} className="w-full text-left px-4 py-3 text-xs font-black text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between">
+                        <span>index.html</span>
+                        <span className="text-[10px] bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 px-1.5 py-0.5 rounded uppercase">Full</span>
+                      </button>
+                      <button onClick={() => handleDownload('css')} className="w-full text-left px-4 py-3 text-xs font-black text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between">
+                        <span>style.css</span>
+                        <span className="text-[10px] bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded uppercase">Styles</span>
+                      </button>
+                      <button onClick={() => handleDownload('js')} className="w-full text-left px-4 py-3 text-xs font-black text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center justify-between">
+                        <span>script.js</span>
+                        <span className="text-[10px] bg-yellow-100 dark:bg-yellow-900/30 text-yellow-600 dark:text-yellow-400 px-1.5 py-0.5 rounded uppercase">Logic</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-            <div className="flex-1 overflow-hidden flex justify-center bg-slate-100 dark:bg-slate-950 p-4 transition-all duration-300">
-              <div 
-                className={`h-full transition-all duration-500 ease-in-out shadow-2xl rounded-lg overflow-hidden ${
-                  activeTab === 'preview' && previewDevice === 'mobile' ? 'w-[375px]' : 'w-full'
-                }`}
-              >
+            
+            <div className="flex-1 overflow-hidden flex justify-center bg-slate-100 dark:bg-slate-950 p-2 transition-all duration-300">
+              <div className={`h-full transition-all duration-500 ease-in-out shadow-2xl rounded-xl overflow-hidden ${activeTab === 'preview' && previewDevice === 'mobile' ? 'w-[375px]' : 'w-full'}`}>
                 {activeTab === 'preview' ? (
-                  <PreviewFrame code={generatedCode} />
+                  <PreviewFrame code={generatedCode} isEditing={isEditing} onElementSelected={(d) => setSelectedElementData(d as any)} onCodeUpdate={(c) => setGeneratedCode(c)} />
                 ) : (
-                  <div className="h-full bg-slate-950 p-8 overflow-auto font-mono text-xs text-indigo-100 selection:bg-indigo-500/30">
-                    <pre className="leading-relaxed"><code>{generatedCode}</code></pre>
+                  <div className="h-full bg-slate-950 p-6 overflow-auto font-mono text-xs text-indigo-100 scrollbar-thin">
+                    <div className="flex justify-between items-center mb-4 border-b border-slate-800 pb-2">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Source Code</span>
+                      <button onClick={() => { navigator.clipboard.writeText(generatedCode); }} className="text-[10px] font-black uppercase text-purple-400 hover:text-purple-300">Copy to clipboard</button>
+                    </div>
+                    <pre className="leading-relaxed whitespace-pre-wrap"><code>{generatedCode}</code></pre>
                   </div>
                 )}
               </div>
@@ -424,14 +465,37 @@ const App: React.FC = () => {
           </div>
         ) : (
           <div className="h-full flex flex-col items-center justify-center text-center p-12 bg-white/50 dark:bg-slate-900/50 rounded-[3rem] border-2 border-dashed border-slate-200 dark:border-slate-800">
-            <div className="relative mb-10">
-              <div className="absolute inset-0 bg-purple-500/20 blur-3xl rounded-full scale-150 animate-pulse"></div>
-              <div className="relative text-8xl">🔮</div>
-            </div>
-            <h3 className="text-3xl font-black mb-4 dark:text-white">Awaiting your Ink</h3>
-            <p className="text-slate-500 dark:text-slate-400 max-w-sm text-lg leading-relaxed">
-              The Wizard is ready to transmute your drawing into code. Upload your vision and choose a palette to begin the ritual.
-            </p>
+            <span className="text-8xl mb-8 animate-bounce">🔮</span>
+            <h3 className="text-3xl font-black mb-4 tracking-tighter">Enter the Wizard's Sanctum</h3>
+            <p className="text-slate-500 dark:text-slate-400 max-w-sm text-lg font-medium">Upload a sketch and pick your style to transmute paper into functional code.</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderHistory = () => (
+    <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 p-8 md:p-20 transition-all">
+      <div className="max-w-6xl mx-auto">
+        <div className="flex justify-between items-end mb-12">
+          <div><h2 className="text-5xl font-black tracking-tight mb-2">The Archive</h2><p className="text-lg text-slate-500 font-medium">Revisit your previous creations.</p></div>
+          <button onClick={() => setView('generator')} className="text-purple-600 font-black hover:underline uppercase tracking-widest text-sm">Return to Lab</button>
+        </div>
+        {history.length === 0 ? (
+          <div className="py-20 text-center bg-white dark:bg-slate-900 rounded-[3rem] border-2 border-dashed dark:border-slate-800">
+            <p className="text-slate-400 text-xl font-black uppercase">Archive is empty</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            {history.map(item => (
+              <div key={item.id} onClick={() => loadFromHistory(item)} className="group relative bg-white dark:bg-slate-900 rounded-[2.5rem] overflow-hidden border border-slate-200 dark:border-slate-800 cursor-pointer hover:shadow-2xl transition-all hover:-translate-y-2">
+                <div className="h-40 bg-slate-100 dark:bg-slate-800 relative overflow-hidden flex items-center justify-center">
+                  {item.image ? <img src={item.image} className="w-full h-full object-cover opacity-60 group-hover:scale-110 transition-transform duration-700" /> : <span className="text-5xl">🔮</span>}
+                  <button onClick={(e) => { e.stopPropagation(); const updated = history.filter(h => h.id !== item.id); setHistory(updated); localStorage.setItem('wizard-history', JSON.stringify(updated)); }} className="absolute top-4 right-4 p-2 bg-red-500/80 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"><svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg></button>
+                </div>
+                <div className="p-6"><h3 className="text-lg font-black truncate mb-1">{item.prompt || "Untitled Vision"}</h3><p className="text-[10px] text-slate-400 font-black uppercase tracking-widest">{new Date(item.timestamp).toLocaleDateString()}</p></div>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -440,51 +504,21 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 dark:bg-slate-950 transition-colors duration-500">
-      <header className="bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border-b dark:border-slate-800 px-8 py-4 flex items-center justify-between sticky top-0 z-50 transition-colors">
-        <button 
-          onClick={() => setView('landing')} 
-          className="flex items-center gap-3 group transition-transform active:scale-95"
-        >
-          <div className="bg-gradient-to-br from-purple-600 to-indigo-600 p-2.5 rounded-2xl text-white shadow-lg shadow-purple-500/20 group-hover:rotate-12 transition-transform">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
-          </div>
+      <header className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border-b dark:border-slate-800 px-8 py-4 flex items-center justify-between sticky top-0 z-50 transition-colors">
+        <button onClick={() => setView('landing')} className="flex items-center gap-3 group active:scale-95 transition-all">
+          <div className="bg-gradient-to-br from-purple-600 to-indigo-600 p-2 rounded-2xl text-white shadow-lg group-hover:rotate-12 transition-transform"><svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg></div>
           <span className="text-2xl font-black dark:text-white tracking-tighter">WIZARD</span>
         </button>
-
         <div className="flex items-center gap-8">
           <nav className="hidden md:flex gap-8">
-            <button 
-              onClick={() => setView('generator')} 
-              className={`text-sm font-black tracking-widest uppercase transition-all ${view === 'generator' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
-            >
-              Generator
-            </button>
-            <button 
-              onClick={() => setView('how-it-works')} 
-              className={`text-sm font-black tracking-widest uppercase transition-all ${view === 'how-it-works' ? 'text-purple-600 dark:text-purple-400' : 'text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}
-            >
-              How it Works
-            </button>
+            <button onClick={() => setView('generator')} className={`text-xs font-black tracking-widest uppercase transition-all ${view === 'generator' ? 'text-purple-600' : 'text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}>Lab</button>
+            <button onClick={() => setView('history')} className={`text-xs font-black tracking-widest uppercase transition-all ${view === 'history' ? 'text-purple-600' : 'text-slate-400 hover:text-slate-900 dark:hover:text-white'}`}>Archive</button>
           </nav>
-          
-          <div className="flex items-center gap-4 border-l dark:border-slate-800 pl-6">
-            <button 
-              onClick={() => setIsDark(!isDark)} 
-              className="p-3 rounded-2xl bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all active:scale-90"
-              aria-label="Toggle Dark Mode"
-            >
-              {isDark ? (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M16.243 16.243l.707.707M7.757 7.757l.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" /></svg>
-              ) : (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
-              )}
-            </button>
-          </div>
+          <button onClick={toggleTheme} className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 hover:scale-110 active:scale-90 transition-all">{isDark ? "☀️" : "🌙"}</button>
         </div>
       </header>
-
       <main className="flex-1 flex flex-col h-[calc(100vh-81px)] overflow-hidden">
-        {view === 'landing' ? renderLanding() : view === 'how-it-works' ? renderHowItWorks() : renderGenerator()}
+        {view === 'landing' ? renderLanding() : view === 'history' ? renderHistory() : renderGenerator()}
       </main>
     </div>
   );

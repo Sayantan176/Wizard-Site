@@ -7,17 +7,30 @@ export interface ColorPalette {
   description: string;
 }
 
-export async function generateWebsiteFromImage(
-  base64Image: string,
-  prompt: string,
-  palette: ColorPalette
-): Promise<string> {
+export interface GenerationOptions {
+  image: string;
+  prompt: string;
+  palette: ColorPalette;
+  fontFamily: string;
+  customColors?: {
+    primary: string;
+    accent: string;
+  };
+}
+
+export async function generateWebsiteFromImage(options: GenerationOptions): Promise<string> {
+  const { image, prompt, palette, fontFamily, customColors } = options;
+  // Initialize Gemini AI with the API key from environment variables
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const model = 'gemini-3-flash-preview';
+  // Use gemini-3-pro-preview for complex coding and design generation tasks
+  const model = 'gemini-3-pro-preview';
   
-  const mimeMatch = base64Image.match(/^data:(image\/\w+);base64,/);
+  const mimeMatch = image.match(/^data:(image\/\w+);base64,/);
   const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
-  const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, '');
+  const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
+
+  const primaryColor = customColors?.primary || palette.colors[0];
+  const accentColor = customColors?.accent || palette.colors[palette.colors.length - 1];
 
   const systemInstruction = `
     You are a world-class "Vision-to-Code" specialist. 
@@ -25,18 +38,24 @@ export async function generateWebsiteFromImage(
 
     STRICT FIDELITY & AESTHETIC REQUIREMENTS:
     1. VISUAL LAYOUT: Mirror the exact spatial relationships shown in the uploaded image. Positions matter.
-    2. COLOR PALETTE: You MUST use the following color theme: "${palette.name}". 
-       Colors to incorporate: ${palette.colors.join(', ')}. 
-       Description: ${palette.description}.
-       Apply these colors to buttons, backgrounds, accents, and borders.
-    3. ANIMATIONS: The user wants a dynamic site. Include CSS and Tailwind animations:
-       - Fade-in or slide-in effects for sections as they appear.
-       - Smooth hover transitions for buttons and cards.
-       - Use 'animate-pulse', 'animate-bounce', or custom @keyframes for key elements.
-    4. CONTENT EXTRACTION: Extract any legible text from the image and use it.
-    5. TAILWIND CSS: Use Tailwind via CDN: <script src="https://cdn.tailwindcss.com"></script>.
-    6. SINGLE FILE: Return one complete, valid HTML file with all CSS and JS embedded.
-    7. IMAGES: Use high-quality Unsplash URLs (https://images.unsplash.com/photo-...) matching the context.
+    2. BRANDING & COLORS: 
+       - Theme Name: "${palette.name}". 
+       - Primary Brand Color: ${primaryColor}.
+       - Accent/CTA Color: ${accentColor}.
+       - Palette Context: ${palette.description}.
+       Use these specific hex codes for backgrounds, buttons, and decorative elements.
+    3. TYPOGRAPHY: 
+       - Use the font family: "${fontFamily}".
+       - You MUST include the appropriate Google Fonts <link> tag in the <head>.
+       - Apply this font globally using Tailwind or CSS.
+    4. ANIMATIONS: Include CSS and Tailwind animations:
+       - Fade-in or slide-in effects for sections.
+       - Smooth hover transitions.
+       - Use 'animate-pulse' or 'animate-bounce' for high-impact CTAs.
+    5. CONTENT: Extract any legible text from the image and use it.
+    6. TAILWIND CSS: Use <script src="https://cdn.tailwindcss.com"></script>.
+    7. SINGLE FILE: Return one complete, valid HTML file.
+    8. IMAGES: Use high-quality Unsplash URLs matching the site context.
   `;
 
   const imagePart = {
@@ -47,11 +66,15 @@ export async function generateWebsiteFromImage(
   };
 
   const textPart = {
-    text: `Replicate this sketch perfectly. Use the "${palette.name}" palette and make the site feel alive with animations.
-    User's Instructions: ${prompt || 'Make it a professional, animated website following the sketch layout.'}`
+    text: `Replicate this sketch perfectly. 
+    Font: ${fontFamily}. 
+    Primary Color: ${primaryColor}. 
+    Accent Color: ${accentColor}.
+    Additional User Instructions: ${prompt || 'Make it a professional, animated website.'}`
   };
 
   try {
+    // Generate content using the new SDK pattern
     const response = await ai.models.generateContent({
       model: model,
       contents: { parts: [imagePart, textPart] },
@@ -61,15 +84,17 @@ export async function generateWebsiteFromImage(
       },
     });
 
-    if (!response.text) {
+    // Access the .text property directly as per the latest API
+    const text = response.text;
+    if (!text) {
       throw new Error("The Wizard returned an empty response.");
     }
 
-    return response.text.trim().replace(/^```html/, '').replace(/```$/, '');
+    return text.trim().replace(/^```html/, '').replace(/```$/, '');
   } catch (error: any) {
     console.error("Gemini API Error:", error);
     if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
-      throw new Error("Quota exhausted. Click the key icon to connect your own API key.");
+      throw new Error("Quota exhausted. Try again later or use a custom API key.");
     }
     throw new Error(`Wizard Error: ${error?.message || "Unknown error"}`);
   }
