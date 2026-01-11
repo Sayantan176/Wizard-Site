@@ -171,6 +171,7 @@ const App: React.FC = () => {
     setView('generator');
     setActiveTab('preview');
     setIsEditing(false);
+    setError(null);
   };
 
   const handleGenerate = async () => {
@@ -188,7 +189,8 @@ const App: React.FC = () => {
       setStatus(GenerationStatus.SUCCESS);
       setActiveTab('preview');
     } catch (err: any) {
-      setError(err instanceof Error ? err.message : "An error occurred.");
+      console.error("Generation failed:", err);
+      setError(err instanceof Error ? err.message : "The transmutation failed unexpectedly.");
       setStatus(GenerationStatus.ERROR);
     }
   };
@@ -398,6 +400,17 @@ const App: React.FC = () => {
             </div>
             <h3 className="text-2xl font-black tracking-tight mb-2">Architecting Reality...</h3>
             <p className="text-slate-500 font-medium">Mixing CSS spells and HTML nodes</p>
+          </div>
+        )}
+
+        {error && (
+          <div className="absolute inset-0 z-30 bg-white/95 dark:bg-slate-950/95 backdrop-blur-xl flex flex-col items-center justify-center p-8 text-center animate-in fade-in">
+            <div className="w-20 h-20 bg-red-100 dark:bg-red-900/50 text-red-600 dark:text-red-400 rounded-full flex items-center justify-center mb-6">
+              <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+            </div>
+            <h3 className="text-3xl font-black text-slate-900 dark:text-white mb-4">Transmutation Failed</h3>
+            <p className="text-slate-500 dark:text-slate-400 max-w-md mb-8 text-lg">{error}</p>
+            <button onClick={() => setError(null)} className="px-10 py-5 bg-purple-600 text-white rounded-2xl font-black text-xl hover:scale-105 transition-all shadow-xl shadow-purple-500/20 active:scale-95">Try Again</button>
           </div>
         )}
 

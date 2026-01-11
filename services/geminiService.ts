@@ -18,12 +18,47 @@ export interface GenerationOptions {
   };
 }
 
+/**
+ * Robustly extracts HTML from a model response that might contain markdown or conversational text.
+ */
+function extractHTML(text: string): string {
+  // 1. Try to find content within ```html ... ``` code blocks
+  const htmlBlockMatch = text.match(/```html\s*([\s\S]*?)\s*```/i);
+  if (htmlBlockMatch && htmlBlockMatch[1]) {
+    return htmlBlockMatch[1].trim();
+  }
+
+  // 2. Try to find content within generic ``` ... ``` code blocks if they look like HTML
+  const genericBlockMatch = text.match(/```\s*([\s\S]*?)\s*```/i);
+  if (genericBlockMatch && genericBlockMatch[1]) {
+    const content = genericBlockMatch[1].trim();
+    if (content.toLowerCase().includes('<html') || content.toLowerCase().includes('<!doctype')) {
+      return content;
+    }
+  }
+
+  // 3. Last resort: Extract from the first occurrence of <!DOCTYPE or <html to the last </html>
+  const docTypeIndex = text.search(/<!DOCTYPE/i);
+  const htmlStartIndex = text.search(/<html/i);
+  const startIndex = docTypeIndex !== -1 ? docTypeIndex : htmlStartIndex;
+  const endIndex = text.toLowerCase().lastIndexOf('</html>');
+
+  if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
+    return text.substring(startIndex, endIndex + 7).trim();
+  }
+
+  // 4. Return as-is if no clear markers are found
+  return text.trim();
+}
+
 export async function generateWebsiteFromImage(options: GenerationOptions): Promise<string> {
   const { image, prompt, palette, fontFamily, customColors } = options;
-  // Initialize Gemini AI with the API key from environment variables
+  
+  // Use a fresh instance to ensure the latest API key is used
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  // Use gemini-3-pro-preview for complex coding and design generation tasks
-  const model = 'gemini-3-pro-preview';
+  
+  // Using gemini-3-flash-preview for a balance of speed, cost, and high-quality coding capabilities
+  const modelName = 'gemini-3-flash-preview';
   
   const mimeMatch = image.match(/^data:(image\/\w+);base64,/);
   const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
@@ -66,36 +101,48 @@ export async function generateWebsiteFromImage(options: GenerationOptions): Prom
   };
 
   const textPart = {
-    text: `Replicate this sketch perfectly. 
-    Font: ${fontFamily}. 
-    Primary Color: ${primaryColor}. 
-    Accent Color: ${accentColor}.
-    Additional User Instructions: ${prompt || 'Make it a professional, animated website.'}`
+    text: `Task: Replicate this sketch perfectly. 
+    Font Family: ${fontFamily}. 
+    Primary Brand Color: ${primaryColor}. 
+    Accent/CTA Color: ${accentColor}.
+    Additional Refinements: ${prompt || 'Make it a professional, modern, and fully animated website.'}
+    
+    Output requirement: Provide ONLY the complete HTML5 source code.`
   };
 
   try {
-    // Generate content using the new SDK pattern
     const response = await ai.models.generateContent({
-      model: model,
+      model: modelName,
       contents: { parts: [imagePart, textPart] },
       config: {
         systemInstruction: systemInstruction,
-        temperature: 0.1,
+        temperature: 0.2, // Slightly higher for creativity in content filling
       },
     });
 
-    // Access the .text property directly as per the latest API
-    const text = response.text;
-    if (!text) {
-      throw new Error("The Wizard returned an empty response.");
+    const rawText = response.text;
+    if (!rawText) {
+      throw new Error("The Wizard returned an empty response. This might be due to safety filters or an invalid image.");
     }
 
-    return text.trim().replace(/^```html/, '').replace(/```$/, '');
-  } catch (error: any) {
-    console.error("Gemini API Error:", error);
-    if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
-      throw new Error("Quota exhausted. Try again later or use a custom API key.");
+    const cleanedCode = extractHTML(rawText);
+    
+    if (!cleanedCode.toLowerCase().includes('<html')) {
+      throw new Error("The Wizard failed to generate valid HTML. Please try refining your sketch or prompt.");
     }
-    throw new Error(`Wizard Error: ${error?.message || "Unknown error"}`);
+
+    return cleanedCode;
+  } catch (error: any) {
+    console.error("Gemini API Error Detail:", error);
+    
+    if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
+      throw new Error("The Wizard's energy (quota) is exhausted. Please wait a few moments before trying again.");
+    }
+    
+    if (error?.message?.includes('safety') || error?.message?.includes('blocked')) {
+      throw new Error("The generation was blocked for safety reasons. Please ensure your sketch doesn't contain sensitive content.");
+    }
+
+    throw new Error(`Wizard Error: ${error?.message || "An unexpected error occurred during transmutation."}`);
   }
 }
