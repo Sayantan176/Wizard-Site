@@ -66,7 +66,14 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const savedHistory = localStorage.getItem('wizard-history');
-    if (savedHistory) setHistory(JSON.parse(savedHistory));
+    if (savedHistory) {
+      try {
+        setHistory(JSON.parse(savedHistory));
+      } catch (e) {
+        console.error("Failed to parse history", e);
+        setHistory([]);
+      }
+    }
 
     const root = window.document.documentElement;
     if (isDark) root.classList.add('dark');
@@ -143,6 +150,9 @@ const App: React.FC = () => {
     setShowExportMenu(false);
   };
 
+  /**
+   * Robust storage helper that handles quota issues by removing old items
+   */
   const saveToHistory = (code: string) => {
     const newItem: HistoryItem = {
       id: Math.random().toString(36).substr(2, 9),
@@ -154,9 +164,36 @@ const App: React.FC = () => {
       fontFamily: selectedFont,
       colors: useCustomColors ? customColors : { primary: selectedPalette.colors[0], accent: selectedPalette.colors[2] }
     };
-    const updated = [newItem, ...history].slice(0, 20);
-    setHistory(updated);
-    localStorage.setItem('wizard-history', JSON.stringify(updated));
+
+    let currentHistory = [newItem, ...history];
+    const maxItems = 12; // Reduced from 20 to preserve space
+    if (currentHistory.length > maxItems) {
+      currentHistory = currentHistory.slice(0, maxItems);
+    }
+
+    // Attempt to save to localStorage with retry logic if quota is exceeded
+    let success = false;
+    let attempts = 0;
+    while (!success && currentHistory.length > 0 && attempts < currentHistory.length + 1) {
+      try {
+        localStorage.setItem('wizard-history', JSON.stringify(currentHistory));
+        success = true;
+      } catch (e) {
+        // If storage is full, remove the oldest item and try again
+        console.warn("Storage quota exceeded, removing oldest history item and retrying...");
+        currentHistory.pop();
+        attempts++;
+      }
+    }
+    
+    setHistory(currentHistory);
+  };
+
+  const clearHistory = () => {
+    if (window.confirm("Are you sure you want to delete all items in the archive? This cannot be undone.")) {
+      setHistory([]);
+      localStorage.removeItem('wizard-history');
+    }
   };
 
   const loadFromHistory = (item: HistoryItem) => {
@@ -491,8 +528,16 @@ const App: React.FC = () => {
     <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-950 p-8 md:p-20 transition-all">
       <div className="max-w-6xl mx-auto">
         <div className="flex justify-between items-end mb-12">
-          <div><h2 className="text-5xl font-black tracking-tight mb-2">The Archive</h2><p className="text-lg text-slate-500 font-medium">Revisit your previous creations.</p></div>
-          <button onClick={() => setView('generator')} className="text-purple-600 font-black hover:underline uppercase tracking-widest text-sm">Return to Lab</button>
+          <div>
+            <h2 className="text-5xl font-black tracking-tight mb-2">The Archive</h2>
+            <p className="text-lg text-slate-500 font-medium">Revisit your previous creations.</p>
+          </div>
+          <div className="flex gap-4">
+            {history.length > 0 && (
+              <button onClick={clearHistory} className="text-red-500 font-black hover:underline uppercase tracking-widest text-sm">Clear Archive</button>
+            )}
+            <button onClick={() => setView('generator')} className="text-purple-600 font-black hover:underline uppercase tracking-widest text-sm">Return to Lab</button>
+          </div>
         </div>
         {history.length === 0 ? (
           <div className="py-20 text-center bg-white dark:bg-slate-900 rounded-[3rem] border-2 border-dashed dark:border-slate-800">

@@ -51,13 +51,15 @@ function extractHTML(text: string): string {
   return text.trim();
 }
 
+/**
+ * Helper to sleep for a given duration
+ */
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export async function generateWebsiteFromImage(options: GenerationOptions): Promise<string> {
   const { image, prompt, palette, fontFamily, customColors } = options;
   
-  // Use a fresh instance to ensure the latest API key is used
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  // Using gemini-3-flash-preview for a balance of speed, cost, and high-quality coding capabilities
   const modelName = 'gemini-3-flash-preview';
   
   const mimeMatch = image.match(/^data:(image\/\w+);base64,/);
@@ -110,39 +112,63 @@ export async function generateWebsiteFromImage(options: GenerationOptions): Prom
     Output requirement: Provide ONLY the complete HTML5 source code.`
   };
 
-  try {
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents: { parts: [imagePart, textPart] },
-      config: {
-        systemInstruction: systemInstruction,
-        temperature: 0.2, // Slightly higher for creativity in content filling
-      },
-    });
+  const maxRetries = 3;
+  let retryCount = 0;
 
-    const rawText = response.text;
-    if (!rawText) {
-      throw new Error("The Wizard returned an empty response. This might be due to safety filters or an invalid image.");
-    }
+  while (retryCount <= maxRetries) {
+    try {
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: { parts: [imagePart, textPart] },
+        config: {
+          systemInstruction: systemInstruction,
+          temperature: 0.2,
+        },
+      });
 
-    const cleanedCode = extractHTML(rawText);
-    
-    if (!cleanedCode.toLowerCase().includes('<html')) {
-      throw new Error("The Wizard failed to generate valid HTML. Please try refining your sketch or prompt.");
-    }
+      const rawText = response.text;
+      if (!rawText) {
+        throw new Error("The Wizard returned an empty response.");
+      }
 
-    return cleanedCode;
-  } catch (error: any) {
-    console.error("Gemini API Error Detail:", error);
-    
-    if (error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED')) {
-      throw new Error("The Wizard's energy (quota) is exhausted. Please wait a few moments before trying again.");
-    }
-    
-    if (error?.message?.includes('safety') || error?.message?.includes('blocked')) {
-      throw new Error("The generation was blocked for safety reasons. Please ensure your sketch doesn't contain sensitive content.");
-    }
+      const cleanedCode = extractHTML(rawText);
+      if (!cleanedCode.toLowerCase().includes('<html')) {
+        throw new Error("Invalid HTML generated.");
+      }
 
-    throw new Error(`Wizard Error: ${error?.message || "An unexpected error occurred during transmutation."}`);
+      return cleanedCode;
+
+    } catch (error: any) {
+      const errorMsg = error?.message || "";
+      const isOverloaded = errorMsg.includes('503') || errorMsg.includes('overloaded');
+      const isRateLimited = errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED');
+
+      if ((isOverloaded || isRateLimited) && retryCount < maxRetries) {
+        retryCount++;
+        // Exponential backoff: 2s, 4s, 8s...
+        const delay = Math.pow(2, retryCount) * 1000;
+        console.warn(`Model overloaded or rate limited. Retrying in ${delay}ms... (Attempt ${retryCount}/${maxRetries})`);
+        await sleep(delay);
+        continue;
+      }
+
+      console.error("Gemini API Error Detail:", error);
+      
+      if (isOverloaded) {
+        throw new Error("The Wizard's workshop is currently too crowded (Model Overloaded). I've tried multiple times, but the server is still busy. Please try again in a minute.");
+      }
+      
+      if (isRateLimited) {
+        throw new Error("The Wizard is working too fast (Rate Limit)! Please wait a few moments before trying again.");
+      }
+      
+      if (errorMsg.includes('safety') || errorMsg.includes('blocked')) {
+        throw new Error("The generation was blocked for safety reasons. Please ensure your sketch doesn't contain sensitive content.");
+      }
+
+      throw new Error(`Wizard Error: ${errorMsg || "An unexpected error occurred during transmutation."}`);
+    }
   }
+
+  throw new Error("Maximum retries reached. The model is still overloaded.");
 }
